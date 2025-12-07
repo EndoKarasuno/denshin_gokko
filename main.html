@@ -1,0 +1,816 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Type 25 Radio Simulator</title>
+    <meta name="description" content="架空無線機 帝国海軍 二五式空一号無線機シミュレータ - モールス信号 & ソナー可視化">
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap');
+
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #050505;
+            color: #fff;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            width: 100vw;
+            overflow: hidden;
+            /* 日本語対応の等幅フォント設定 */
+            font-family: 'Share Tech Mono', 'MS Gothic', 'Osaka-Mono', monospace;
+            
+            /* 透過モード時用の背景パターン */
+            background-image: linear-gradient(45deg, #111 25%, #000 25%, #000 50%, #111 50%, #111 75%, #000 75%, #000 100%);
+            background-size: 20px 20px;
+        }
+
+        #container {
+            position: relative;
+            /* 画面比率固定 (800:500) */
+            width: 95vw;
+            height: auto;
+            max-height: 95vh;
+            aspect-ratio: 800 / 500;
+            box-shadow: 0 0 50px rgba(50, 255, 120, 0.1);
+            background: #000;
+        }
+
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+            border-radius: 4px;
+            /* スマホ用: 長押しメニューやスクロールを無効化 */
+            -webkit-touch-callout: none;
+            -webkit-user-select: none;
+            user-select: none;
+            touch-action: none;
+        }
+
+        /* CRTエフェクトレイヤー */
+        #crt-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            z-index: 10;
+            background: 
+                linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.25) 50%),
+                linear-gradient(90deg, rgba(255, 0, 0, 0.06), rgba(0, 255, 0, 0.02), rgba(0, 0, 255, 0.06));
+            background-size: 100% 2px, 3px 100%;
+            box-shadow: inset 0 0 60px rgba(0,0,0,0.8);
+        }
+
+        /* 共通オーバーレイ設定 */
+        .overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 5, 2, 0.95);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            flex-direction: column;
+            z-index: 20;
+        }
+
+        /* 操作説明画面 */
+        #instruction-box {
+            border: 1px solid #32ff78;
+            padding: 30px;
+            max-width: 85%;
+            color: #32ff78;
+            box-shadow: 0 0 15px rgba(50, 255, 120, 0.3);
+            text-align: left;
+            background: rgba(0, 20, 10, 0.9);
+        }
+        h1 { 
+            margin-top: 0; 
+            font-size: 24px; 
+            border-bottom: 1px solid #32ff78; 
+            padding-bottom: 10px; 
+            font-weight: normal;
+        }
+        ul { 
+            line-height: 1.8; 
+            font-size: 16px; 
+            padding-left: 20px; 
+            margin-bottom: 25px;
+        }
+        li { margin-bottom: 5px; }
+        .key { color: #00f0ff; font-weight: bold; }
+        
+        #btn-start {
+            margin-top: 10px;
+            padding: 12px 40px;
+            background: #002814;
+            color: #32ff78;
+            border: 1px solid #32ff78;
+            font-family: inherit;
+            font-size: 18px;
+            cursor: pointer;
+            transition: all 0.2s;
+            display: block;
+            margin-left: auto;
+            margin-right: auto;
+        }
+        #btn-start:hover { background: #32ff78; color: #000; }
+
+        /* 起動待機画面 */
+        #init-msg {
+            border: 2px solid #00f0ff;
+            padding: 20px;
+            color: #00f0ff;
+            font-size: 20px;
+            background: rgba(0, 20, 30, 0.9);
+            box-shadow: 0 0 20px #00f0ff;
+            animation: blink 1s infinite;
+            cursor: pointer;
+            text-align: center;
+        }
+        @keyframes blink { 50% { opacity: 0.5; } }
+
+    </style>
+</head>
+<body>
+
+<div id="container">
+    <canvas id="mainCanvas" width="800" height="500"></canvas>
+    <div id="crt-overlay"></div>
+
+    <!-- 1. 操作説明画面 (日本語) -->
+    <div id="instruction-overlay" class="overlay">
+        <div id="instruction-box">
+            <h1>二五式空一号無線機 - 操作マニュアル</h1>
+            <ul>
+                <li><span class="key">手動打鍵</span>: [Space]キー、または画面の何もない場所をクリック/タップ。</li>
+                <li><span class="key">AUDIO タブ</span>: 周波数EQの調整（ノイズ・感度・低音）。</li>
+                <li><span class="key">DEC/SCOPE タブ</span>: ソナー(履歴)、波形モニタ、自動解読ログ。</li>
+                <li><span class="key">TORA / 1208</span>: 暗号電文を自動送信。</li>
+                <li><span class="key">CLICK</span>: 電鍵の打鍵音（カチャカチャ音）のON/OFF。</li>
+                <li><span class="key">TRANS</span>: 透過モード切替（背景透明化・CRT効果OFF）。</li>
+            </ul>
+            <button id="btn-understand">システム起動</button>
+        </div>
+    </div>
+
+    <!-- 2. 音声初期化待ち画面 -->
+    <div id="start-overlay" class="overlay" style="display: none;">
+        <div id="init-msg">システムスタンバイ<br>画面をタッチして接続</div>
+    </div>
+</div>
+
+<script>
+/**
+ * TYPE 25 RADIO SIMULATOR (Web Version - Japanese UI)
+ * Fictional Device: Imperial Navy Type 25 Air Mark 1 Radio
+ */
+
+// --- Constants ---
+const SAMPLE_RATE = 44100;
+const FREQ = 800;
+const DOT_DURATION = 0.08; 
+
+// Colors
+const COLOR_BG_DARK = "#050c0a";
+const COLOR_PHOSPHOR = "#32ff78";
+const COLOR_PHOSPHOR_DIM = "#0f5028";
+const COLOR_ACCENT = "#00f0ff";
+
+// Morse Data
+const MORSE_CODE = {
+    'TO': [1, 1, 3, 1, 1], 'RA': [1, 1, 1],
+    'NI': [3, 1, 3, 1],    'I':  [1, 3],
+    'TA': [3, 1],          'KA': [1, 3, 1, 1],
+    'YA': [1, 3, 3],       'MA': [3, 1, 1, 3],
+    'NO': [1, 1, 3, 3],    'HO': [3, 1, 1],
+    'DAKUTEN': [1, 1],     'RE': [3, 3, 3],
+    '1': [1, 3, 3, 3, 3],  '2': [1, 1, 3, 3, 3],
+    '0': [3, 3, 3, 3, 3],  '8': [3, 3, 3, 1, 1],
+};
+const MORSE_CHAR_MAP = {
+    'TO': 'ト', 'RA': 'ラ', 'NI': 'ニ', 'I': 'イ', 'TA': 'タ', 'KA': 'カ',
+    'YA': 'ヤ', 'MA': 'マ', 'NO': 'ノ', 'HO': 'ホ', 'DAKUTEN': '゛', 'RE': 'レ',
+    '1': '一', '2': '二', '0': '〇', '8': '八'
+};
+const SEQ_TORA = ['TO', 'RA', 'TO', 'RA', 'TO', 'RA'];
+const SEQ_NIITAKA = ['NI', 'I', 'TA', 'KA', 'YA', 'MA', 'NO', 'HO', 'DAKUTEN', 'RE', '1', '2', '0', '8'];
+
+const EQ_LABELS = ["32", "64", "125", "250", "500", "1k", "2k", "4k", "8k", "16k"];
+
+// --- State ---
+const state = {
+    currentScreen: "DECRYPT",
+    lamp: false,
+    eqValues: [0.3, 0.3, 0.4, 0.6, 0.8, 0.8, 0.6, 0.4, 0.2, 0.1],
+    currentChar: "",
+    currentCode: "",
+    logHistory: [],
+    isPlaying: false,
+    signalLevel: 0.0,
+    transparentMode: false,
+    keyClickEnabled: true,
+    audioInitialized: false
+};
+
+// --- Audio System ---
+class AudioSystem {
+    constructor() {
+        this.ctx = null;
+        this.masterGain = null;
+        this.osc = null;     
+        this.oscGain = null;
+        this.noiseNode = null; 
+        this.noiseGain = null;
+        this.clickBufferDown = null;
+        this.clickBufferUp = null;
+    }
+
+    async init() {
+        const AudioContext = window.AudioContext || window.webkitAudioContext;
+        this.ctx = new AudioContext();
+        this.masterGain = this.ctx.createGain();
+        this.masterGain.connect(this.ctx.destination);
+        this.masterGain.gain.value = 0.5;
+
+        this.clickBufferDown = this.createClickBuffer("down");
+        this.clickBufferUp = this.createClickBuffer("up");
+        this.bgNoiseBuffer = this.createBgNoiseBuffer();
+        
+        // Background Noise
+        this.startBgNoise();
+        
+        // Tone Oscillator
+        this.osc = this.ctx.createOscillator();
+        this.osc.type = 'sine';
+        this.osc.frequency.value = FREQ;
+        
+        this.oscGain = this.ctx.createGain();
+        this.oscGain.gain.value = 0; 
+        
+        // Harmonic (Analog feel)
+        this.oscHarmonic = this.ctx.createOscillator();
+        this.oscHarmonic.type = 'sine';
+        this.oscHarmonic.frequency.value = FREQ * 3;
+        this.oscHarmonicGain = this.ctx.createGain();
+        this.oscHarmonicGain.gain.value = 0;
+
+        this.osc.connect(this.oscGain);
+        this.oscHarmonic.connect(this.oscHarmonicGain);
+        this.oscHarmonicGain.connect(this.oscGain);
+        this.oscGain.connect(this.masterGain);
+        
+        this.osc.start();
+        this.oscHarmonic.start();
+        this.updateParams();
+    }
+
+    createClickBuffer(mode) {
+        const duration = 0.05;
+        const frameCount = this.ctx.sampleRate * duration;
+        const buffer = this.ctx.createBuffer(2, frameCount, this.ctx.sampleRate);
+        for (let channel = 0; channel < 2; channel++) {
+            const nowBuff = buffer.getChannelData(channel);
+            for (let i = 0; i < frameCount; i++) {
+                const t = i / this.ctx.sampleRate;
+                const noise = (Math.random() * 2 - 1);
+                let val = 0;
+                if (mode === "down") {
+                    const env = Math.exp(-t * 100);
+                    const tone = Math.sin(2 * Math.PI * 1500 * t) * 0.2;
+                    val = (noise * 0.8 + tone) * env;
+                } else {
+                    const env = Math.exp(-t * 80);
+                    const tone = Math.sin(2 * Math.PI * 300 * t) * 0.3;
+                    val = (noise * 0.5 + tone) * env * 0.6;
+                }
+                nowBuff[i] = val;
+            }
+        }
+        return buffer;
+    }
+
+    createBgNoiseBuffer() {
+        const duration = 5.0;
+        const frameCount = this.ctx.sampleRate * duration;
+        const buffer = this.ctx.createBuffer(2, frameCount, this.ctx.sampleRate);
+        for (let ch = 0; ch < 2; ch++) {
+            const data = buffer.getChannelData(ch);
+            for (let i = 0; i < frameCount; i++) {
+                data[i] = (Math.random() * 2 - 1) * 0.1; 
+            }
+        }
+        return buffer;
+    }
+
+    startBgNoise() {
+        this.noiseNode = this.ctx.createBufferSource();
+        this.noiseNode.buffer = this.bgNoiseBuffer;
+        this.noiseNode.loop = true;
+        this.noiseGain = this.ctx.createGain();
+        this.noiseNode.connect(this.noiseGain);
+        this.noiseGain.connect(this.masterGain);
+        this.noiseNode.start();
+    }
+
+    playClick(mode) {
+        if (!state.keyClickEnabled) return;
+        const source = this.ctx.createBufferSource();
+        source.buffer = (mode === "down") ? this.clickBufferDown : this.clickBufferUp;
+        
+        // EQ影響
+        const vals = state.eqValues;
+        const gainLow = (vals[0]+vals[1]+vals[2])/3;
+        const gainHigh = (vals[6]+vals[7]+vals[8]+vals[9])/4;
+        
+        const gainNode = this.ctx.createGain();
+        gainNode.gain.value = 0.5 + gainLow * 0.5 + gainHigh * 0.2;
+        source.connect(gainNode);
+        gainNode.connect(this.masterGain);
+        source.start();
+    }
+
+    setTone(on) {
+        const targetGain = on ? this.currentToneVolume : 0;
+        if (on) {
+            this.oscGain.gain.setTargetAtTime(targetGain, this.ctx.currentTime, 0.005);
+            this.oscHarmonicGain.gain.setTargetAtTime(targetGain * 0.1, this.ctx.currentTime, 0.005);
+        } else {
+            this.oscGain.gain.setTargetAtTime(0, this.ctx.currentTime, 0.005);
+            this.oscHarmonicGain.gain.setTargetAtTime(0, this.ctx.currentTime, 0.005);
+        }
+    }
+
+    updateParams() {
+        if (!this.ctx) return;
+        const vals = state.eqValues;
+        const gainLow = (vals[0]+vals[1]+vals[2])/3 * 1.5;
+        const gainMid = (vals[3]+vals[4]+vals[5])/3 * 1.2;
+        const gainHigh = (vals[6]+vals[7]+vals[8]+vals[9])/4 * 1.5;
+        const bgVol = (gainLow * 0.05 + gainHigh * 0.05);
+        if(this.noiseGain) this.noiseGain.gain.setTargetAtTime(bgVol, this.ctx.currentTime, 0.1);
+        this.currentToneVolume = gainMid * 0.5;
+        if (state.lamp) {
+             this.oscGain.gain.setTargetAtTime(this.currentToneVolume, this.ctx.currentTime, 0.01);
+        }
+    }
+}
+const audio = new AudioSystem();
+
+// --- Canvas & Visuals ---
+const canvas = document.getElementById('mainCanvas');
+const ctx = canvas.getContext('2d', { alpha: false }); 
+
+const sonarCanvas = document.createElement('canvas');
+sonarCanvas.width = 350;
+sonarCanvas.height = 350;
+const sonarCtx = sonarCanvas.getContext('2d');
+sonarCtx.fillStyle = COLOR_BG_DARK;
+sonarCtx.fillRect(0, 0, 350, 350);
+
+// UI Helper Classes
+class Rect {
+    constructor(x, y, w, h) {
+        this.x = x; this.y = y; this.w = w; this.h = h;
+    }
+    contains(px, py) {
+        return px >= this.x && px <= this.x + this.w && py >= this.y && py <= this.y + this.h;
+    }
+}
+
+class TabSystem {
+    constructor() {
+        this.rects = [new Rect(20, 20, 140, 40), new Rect(170, 20, 140, 40)];
+        this.labels = ["AUDIO (EQ)", "DEC / SCOPE"];
+        this.screens = ["EQ", "DECRYPT"];
+    }
+    draw() {
+        this.rects.forEach((rect, i) => {
+            const isActive = state.currentScreen === this.screens[i];
+            ctx.strokeStyle = isActive ? COLOR_PHOSPHOR : COLOR_PHOSPHOR_DIM;
+            ctx.lineWidth = isActive ? 2 : 1;
+            ctx.strokeRect(rect.x, rect.y, rect.w, rect.h);
+            if (isActive && !state.transparentMode) {
+                ctx.fillStyle = "#002814";
+                ctx.fillRect(rect.x, rect.y, rect.w, rect.h);
+            }
+            ctx.fillStyle = isActive ? COLOR_PHOSPHOR : COLOR_PHOSPHOR_DIM;
+            ctx.font = "bold 16px 'Share Tech Mono'";
+            ctx.textAlign = "center";
+            ctx.textBaseline = "middle";
+            ctx.fillText(this.labels[i], rect.x + rect.w/2, rect.y + rect.h/2);
+        });
+    }
+    checkClick(x, y) {
+        this.rects.forEach((rect, i) => {
+            if (rect.contains(x, y)) state.currentScreen = this.screens[i];
+        });
+        return this.rects.some(r => r.contains(x, y));
+    }
+}
+
+class Button {
+    constructor(x, y, w, h, text, action, isToggle=false) {
+        this.rect = new Rect(x, y, w, h);
+        this.text = text;
+        this.action = action;
+        this.isToggle = isToggle;
+    }
+    draw() {
+        let color = COLOR_PHOSPHOR_DIM;
+        let lineWidth = 1;
+        let isActive = false;
+        if (this.isToggle) {
+            if (this.text === "TRANS" && state.transparentMode) isActive = true;
+            if (this.text === "CLICK" && state.keyClickEnabled) isActive = true;
+        }
+        if (isActive) {
+            color = COLOR_ACCENT;
+            lineWidth = 2;
+        }
+        ctx.strokeStyle = color;
+        ctx.lineWidth = lineWidth;
+        ctx.strokeRect(this.rect.x, this.rect.y, this.rect.w, this.rect.h);
+        ctx.fillStyle = color;
+        ctx.font = "14px 'Share Tech Mono'";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText(this.text, this.rect.x + this.rect.w/2, this.rect.y + this.rect.h/2);
+    }
+    checkClick(x, y) {
+        if (this.rect.contains(x, y)) {
+            this.action();
+            return true;
+        }
+        return false;
+    }
+}
+
+class EqSlider {
+    constructor(x, y, w, h, index, label) {
+        this.rect = new Rect(x, y, w, h);
+        this.index = index;
+        this.label = label;
+        this.isDragging = false;
+    }
+    draw() {
+        const val = state.eqValues[this.index];
+        const cx = this.rect.x + this.rect.w/2;
+        ctx.fillStyle = COLOR_PHOSPHOR_DIM;
+        ctx.fillRect(cx - 1, this.rect.y, 2, this.rect.h);
+        const fillH = this.rect.h * val;
+        ctx.fillStyle = COLOR_PHOSPHOR;
+        ctx.fillRect(cx - 4, this.rect.y + this.rect.h - fillH, 8, fillH);
+        ctx.fillStyle = COLOR_PHOSPHOR_DIM;
+        ctx.font = "12px 'Share Tech Mono'";
+        ctx.textAlign = "center";
+        ctx.fillText(this.label, cx, this.rect.y + this.rect.h + 15);
+    }
+    updateFromMouse(y) {
+        let val = 1.0 - (y - this.rect.y) / this.rect.h;
+        val = Math.max(0.0, Math.min(1.0, val));
+        state.eqValues[this.index] = val;
+        audio.updateParams();
+    }
+}
+
+// Logic
+function sleep(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+async function playSequence(seq) {
+    if (state.isPlaying) return;
+    state.isPlaying = true;
+    state.logHistory = []; 
+    const unit = DOT_DURATION * 1000; 
+    for (let charKey of seq) {
+        if (!state.isPlaying) break;
+        const charDisplay = MORSE_CHAR_MAP[charKey] || charKey;
+        state.currentChar = charDisplay;
+        state.currentCode = "";
+        const pattern = MORSE_CODE[charKey];
+        if (!pattern) continue;
+        for (let signal of pattern) {
+            state.currentCode += (signal === 1 ? "・" : "－");
+            audio.playClick("down");
+            state.lamp = true;
+            audio.setTone(true);
+            await sleep(unit * signal);
+            state.lamp = false;
+            audio.setTone(false);
+            audio.playClick("up");
+            await sleep(unit);
+        }
+        state.logHistory.push(charDisplay);
+        if (state.logHistory.length > 32) state.logHistory.shift();
+        await sleep(unit * 3);
+    }
+    state.isPlaying = false;
+    state.currentChar = "";
+    state.currentCode = "";
+}
+
+const tabSystem = new TabSystem();
+const sliders = EQ_LABELS.map((lbl, i) => new EqSlider(60 + i * 70, 180, 30, 200, i, lbl));
+const buttons = [
+    new Button(430, 20, 90, 30, "TORA", () => playSequence(SEQ_TORA)),
+    new Button(530, 20, 90, 30, "1208", () => playSequence(SEQ_NIITAKA)),
+    new Button(630, 20, 80, 30, "CLICK", () => { state.keyClickEnabled = !state.keyClickEnabled; }, true),
+    new Button(720, 20, 60, 30, "TRANS", () => { 
+        state.transparentMode = !state.transparentMode; 
+        document.getElementById('crt-overlay').style.display = state.transparentMode ? 'none' : 'block';
+    }, true)
+];
+
+const waveData = new Array(80).fill(0);
+
+function updateSonar() {
+    const tempC = document.createElement('canvas');
+    tempC.width = 350; tempC.height = 350;
+    const tc = tempC.getContext('2d');
+    tc.drawImage(sonarCanvas, 0, 0);
+    sonarCtx.drawImage(tempC, 0, 2);
+    const noiseLevel = state.eqValues.slice(6).reduce((a,b)=>a+b,0) / 4 * 0.5;
+    sonarCtx.fillStyle = COLOR_BG_DARK;
+    sonarCtx.fillRect(0, 0, 350, 2);
+    for (let x = 0; x < 350; x+=2) {
+        if (Math.random() < noiseLevel) {
+            const intensity = Math.floor(Math.random() * 200);
+            sonarCtx.fillStyle = `rgb(0, ${intensity}, ${Math.floor(intensity/3)})`;
+            sonarCtx.fillRect(x, 0, 2, 2);
+        }
+    }
+    if (state.lamp) {
+        const center = 175;
+        const width = 10 * (state.eqValues.slice(3,6).reduce((a,b)=>a+b,0)/3);
+        for (let dx = -width; dx < width; dx++) {
+            const dist = Math.abs(dx) / width;
+            let bright = 255 * (1.0 - dist);
+            if (bright > 0) {
+                let color = bright > 200 ? `rgb(${bright}, 255, 255)` : `rgb(0, ${bright}, ${bright})`;
+                sonarCtx.fillStyle = color;
+                sonarCtx.fillRect(center + dx, 0, 1, 2);
+            }
+        }
+    }
+}
+
+function updateWave() {
+    let target = state.lamp ? 1.0 : 0.05;
+    target += (Math.random() - 0.5) * 0.1;
+    state.signalLevel += (target - state.signalLevel) * 0.4;
+    waveData.push(state.signalLevel);
+    waveData.shift();
+}
+
+function draw() {
+    if (state.transparentMode) {
+        ctx.clearRect(0, 0, canvas.width, canvas.height); 
+    } else {
+        ctx.fillStyle = COLOR_BG_DARK;
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.strokeStyle = "#0a1e14";
+        ctx.lineWidth = 1;
+        for (let x = 0; x < canvas.width; x += 40) {
+            ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, canvas.height); ctx.stroke();
+        }
+        for (let y = 0; y < canvas.height; y += 40) {
+            ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(canvas.width, y); ctx.stroke();
+        }
+    }
+
+    tabSystem.draw();
+    buttons.forEach(b => b.draw());
+
+    if (state.currentScreen === "EQ") {
+        ctx.fillStyle = COLOR_PHOSPHOR;
+        ctx.font = "bold 20px 'Arial'";
+        ctx.textAlign = "left";
+        ctx.fillText("FREQUENCY CALIBRATION", 60, 115);
+        sliders.forEach(s => s.draw());
+    } else {
+        updateSonar();
+        updateWave();
+        const sonarX = 30, sonarY = 100;
+        ctx.drawImage(sonarCanvas, sonarX, sonarY);
+        ctx.strokeStyle = COLOR_PHOSPHOR;
+        ctx.lineWidth = 2;
+        ctx.strokeRect(sonarX, sonarY, 350, 350);
+
+        const waveX = 400, waveY = 100, waveW = 360, waveH = 100;
+        if (!state.transparentMode) {
+            ctx.fillStyle = COLOR_BG_DARK;
+            ctx.fillRect(waveX, waveY, waveW, waveH);
+        }
+        ctx.strokeStyle = COLOR_PHOSPHOR_DIM;
+        ctx.lineWidth = 1;
+        ctx.strokeRect(waveX, waveY, waveW, waveH);
+        
+        ctx.beginPath();
+        const step = waveW / waveData.length;
+        const midY = waveY + waveH / 2;
+        const amp = waveH * 0.4;
+        waveData.forEach((val, i) => {
+            const x = waveX + i * step;
+            let offset = 0;
+            if (val > 0.3) {
+                 offset = Math.sin(i * 0.8 + Date.now() * 0.02) * (val * amp);
+            } else {
+                 offset = (Math.random()-0.5) * (val * amp * 2);
+            }
+            const y = midY - offset;
+            if (i===0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+        });
+        ctx.strokeStyle = COLOR_ACCENT;
+        ctx.lineWidth = 2;
+        ctx.stroke();
+
+        const infoY = 210;
+        if (!state.transparentMode) {
+            ctx.strokeStyle = COLOR_PHOSPHOR_DIM;
+            ctx.strokeRect(400, infoY, 150, 100);
+        }
+        ctx.fillStyle = COLOR_PHOSPHOR_DIM;
+        ctx.font = "12px 'Arial'";
+        ctx.textAlign = "left";
+        ctx.fillText("DECODED", 405, infoY + 15);
+        
+        if (state.currentChar) {
+            ctx.fillStyle = COLOR_ACCENT;
+            ctx.font = "40px 'Impact'";
+            ctx.textAlign = "center";
+            ctx.fillText(state.currentChar, 475, infoY + 60);
+        }
+        
+        ctx.fillStyle = COLOR_PHOSPHOR;
+        ctx.font = "bold 20px 'Arial'";
+        ctx.textAlign = "left";
+        ctx.fillText(state.currentCode, 560, infoY + 50);
+
+        const logX = 400, logY = 320, logW = 360, logH = 130;
+        if (!state.transparentMode) {
+            ctx.fillStyle = COLOR_BG_DARK;
+            ctx.fillRect(logX, logY, logW, logH);
+        }
+        ctx.strokeStyle = COLOR_PHOSPHOR_DIM;
+        ctx.lineWidth = 1;
+        ctx.strokeRect(logX, logY, logW, logH);
+        ctx.fillStyle = COLOR_PHOSPHOR;
+        ctx.font = "16px 'MS Gothic', monospace";
+        ctx.textAlign = "left";
+        const text = state.logHistory.join("");
+        const lineLen = 18;
+        const lines = [];
+        for (let i=0; i<text.length; i+=lineLen) lines.push(text.substr(i, lineLen));
+        const startLine = Math.max(0, lines.length - 6);
+        lines.slice(startLine).forEach((line, i) => {
+             ctx.fillText(line, logX + 10, logY + 25 + i * 20);
+        });
+    }
+
+    const lampX = 770, lampY = 35;
+    ctx.fillStyle = state.lamp ? COLOR_ACCENT : "#14281e";
+    ctx.beginPath();
+    ctx.arc(lampX, lampY, 8, 0, Math.PI*2);
+    ctx.fill();
+
+    requestAnimationFrame(draw);
+}
+
+// Interaction
+let manualKeying = false;
+
+function getScaledCoordinates(clientX, clientY) {
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    return {
+        x: (clientX - rect.left) * scaleX,
+        y: (clientY - rect.top) * scaleY
+    };
+}
+
+function handleInteraction(clientX, clientY, isDown) {
+    if (!state.audioInitialized) return;
+
+    const { x, y } = getScaledCoordinates(clientX, clientY);
+    let uiHit = false;
+
+    if (isDown) {
+        if (tabSystem.checkClick(x, y)) uiHit = true;
+        for (let b of buttons) {
+            if (b.checkClick(x, y)) uiHit = true;
+        }
+        if (state.currentScreen === "EQ") {
+            sliders.forEach(s => {
+                if (s.rect.contains(x, y)) {
+                    s.isDragging = true;
+                    s.updateFromMouse(y);
+                    uiHit = true;
+                }
+            });
+        }
+    } else {
+        if (state.currentScreen === "EQ") {
+            sliders.forEach(s => s.isDragging = false);
+        }
+    }
+
+    if (!uiHit && !state.isPlaying) {
+        if (isDown && !manualKeying) {
+            manualKeying = true;
+            state.lamp = true;
+            state.currentChar = "KEY";
+            audio.playClick("down");
+            audio.setTone(true);
+        } else if (!isDown && manualKeying) {
+            manualKeying = false;
+            state.lamp = false;
+            state.currentChar = "";
+            audio.setTone(false);
+            audio.playClick("up");
+        }
+    }
+}
+
+// Event Listeners
+canvas.addEventListener('mousedown', e => handleInteraction(e.clientX, e.clientY, true));
+canvas.addEventListener('mouseup', e => handleInteraction(e.clientX, e.clientY, false));
+canvas.addEventListener('touchstart', e => {
+    e.preventDefault();
+    handleInteraction(e.touches[0].clientX, e.touches[0].clientY, true);
+}, {passive: false});
+canvas.addEventListener('touchend', e => {
+    e.preventDefault();
+    if (state.currentScreen === "EQ") sliders.forEach(s => s.isDragging = false);
+    if (manualKeying) {
+        manualKeying = false;
+        state.lamp = false;
+        state.currentChar = "";
+        audio.setTone(false);
+        audio.playClick("up");
+    }
+});
+
+canvas.addEventListener('mousemove', e => {
+    if (state.currentScreen === "EQ") {
+        const { x, y } = getScaledCoordinates(e.clientX, e.clientY);
+        sliders.forEach(s => {
+            if (s.isDragging) s.updateFromMouse(y);
+        });
+    }
+});
+canvas.addEventListener('touchmove', e => {
+    e.preventDefault();
+    if (state.currentScreen === "EQ") {
+        const { x, y } = getScaledCoordinates(e.touches[0].clientX, e.touches[0].clientY);
+        sliders.forEach(s => {
+            if (s.isDragging) s.updateFromMouse(y);
+        });
+    }
+}, {passive: false});
+
+window.addEventListener('keydown', e => {
+    if (e.code === "Space" && !state.isPlaying && !manualKeying) {
+        if (!state.audioInitialized) return;
+        manualKeying = true;
+        state.lamp = true;
+        state.currentChar = "KEY";
+        audio.playClick("down");
+        audio.setTone(true);
+    }
+});
+window.addEventListener('keyup', e => {
+    if (e.code === "Space" && manualKeying) {
+        manualKeying = false;
+        state.lamp = false;
+        state.currentChar = "";
+        audio.setTone(false);
+        audio.playClick("up");
+    }
+});
+
+// Instruction Overlay Control
+document.getElementById('btn-understand').addEventListener('click', () => {
+    document.getElementById('instruction-overlay').style.display = 'none';
+    document.getElementById('start-overlay').style.display = 'flex';
+});
+
+document.getElementById('start-overlay').addEventListener('click', async function() {
+    this.style.display = 'none';
+    await audio.init();
+    state.audioInitialized = true;
+    draw(); 
+});
+
+</script>
+</body>
+</html>
